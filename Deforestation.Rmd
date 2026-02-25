@@ -262,4 +262,5 @@ These observations suggest things might be occurring more regionally rather than
 
 
 ***Shiny app R script: https://github.com/alexishunting/global_deforestation_2000-2025.git***
+
 ***Image Link: https://www.rainforest-alliance.org/wp-content/uploads/2020/11/peruvian-amazon-rainforest-canopy.jpg.optimal.jpg***
