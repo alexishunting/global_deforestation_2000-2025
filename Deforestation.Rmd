@@ -1,0 +1,265 @@
+---
+title: "Global Deforestation Trends"
+output: html_document
+runtime: shiny
+---
+**Author: Alexis Hunting**
+
+*Word Count: 747*
+
+***Introducing the Dataset***
+
+This deforestation dataset, pulled from Kaggle, provides the global forest dynamics from 2000-2025. The main columns in the dataset include: forest area, deforestation and afforestation rates, carbon stock levels, and the primary drivers influencing forest change. However, for this analysis, the final column, primary drivers influencing forest change, was not included due to being qualitative.
+
+***Problem Formulation***
+
+The clearing of forests comes a loss of habitat for animals to live in. Plus, forests are one of the largest carbon holders and air regulators. Deforestation is a direct cause for increase carbon levels, leading to impacts and changes to the climate of a region and its surrounding areas. 
+
+I wanted to see if the deforestation rates could be offset by afforestation rates, and given this how the carbon levels tracked with that. The timeline aspect of this dataset helps to give a better idea of the long-term changes rather than simply going year by year.
+
+By creating an interactive map visualization with a timeline plot, I hope to answer some of the following questions:
+
+- Are certain regions more impacted by deforestation than others? Does this impact carbon levels?
+- Do larger countries have more of a safety net to deforestation than other countries?
+- How does deforestation and carbon levels interact with one another and is there a relationship?
+- Are these rates consistent or do they change by year?
+
+```{r, echo=FALSE, out.width="85%", fig.align="center"}
+knitr::include_graphics("https://www.rainforest-alliance.org/wp-content/uploads/2020/11/peruvian-amazon-rainforest-canopy.jpg.optimal.jpg")
+```
+
+***Building the Interface***
+
+The primary steps to building the interface included: importing the libraries necessary, linking the dataset to R, and cleaning the data to best assist the interactive visualization.
+
+The first factor was to filter out countries within the dataset that did not align clearly to a singular country; these being labeled country_gen_000. The other preparation steps taken was adding the ISO3 column in the dataset which is the country code. This was a crucial step for the later process of linking the map table with the deforestation dataset. 
+
+The overall goal for the interface layout was to be intuitive. The global map displays forest area patterns in recent years, while the timeline allows users to filter specific years or ranges. A side-by-side comparison helps to keep the information paired and analysis tied to the visualization. The metric drop down helps to change and filter the plot, which is helpful in reducing spatial waste and helps the user only focus on the areas of their own interest. For the plot itself, the timeline is adjustable, the plot displays both the global average for the given metric and the selected country, to best give the reader an idea of how a specific country compares to the rest of the world. 
+
+The reactive structure of the graph stems from the map click (country choice), the metric (column selected), and the years (timeline/range) inputs. These inputs are what updates the reactive val, clicked_iso3, which stores the country code of the country that was selected on the map and triggers the observed map click event, which ties the map with the plot. This sets the reactive expression up to filter the data given the observed click event. 
+
+The selected_data() condenses down to the country chosen and the time range. Then the avg__all_countries plots the global averages on top of the filtered data to help with global comparisons. The map itself does not react to the click changes, but the plots continue to re-render given new instructions by the user.For the plot, the aesthetics include a legend to differentiate the selected country and the global average, and labeled axis to determine the range and the timeline chosen. 
+
+***The Global Deforestation Trends from 2000-2025***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+# library imports
+
+# Some of the key libraries that were: leaflet (create interactive map interfaces), sf (helps to store the outline the borders of the countries), rnaturalearth (provides the borders of the countries in a usable sf format), and countrycode (is the connecting factor between country names and their codes). 
+
+library(readr)
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(leaflet)
+library(sf)
+library(rnaturalearth)
+library(countrycode)
+
+# importing the dataset from kaggle
+
+download.file(
+  "https://www.kaggle.com/api/v1/datasets/download/ashyou09/global-deforestation-and-afforestation-2000-2025",
+  destfile = "deforestation.zip",
+  mode = "wb"
+)
+
+unzipped_files = unzip("deforestation.zip", list = TRUE)
+csv_name = unzipped_files$Name[grepl("\\.csv$", unzipped_files$Name)][1]
+unzip("deforestation.zip", files = csv_name, overwrite = TRUE)
+data = readr::read_csv(csv_name)
+
+# looking at the first few rows to make sure everything is loading correctly
+
+# head(data)
+
+# cleaning the data
+
+data = subset(data, !grepl("Country_Gen", Country))  # filtering countries to only include those with a name to help map the country code to it
+data$iso3 = countrycode(data$Country, origin = "country.name", destination = "iso3c") # adding a new column that includes the country code for mapping
+
+# creating global variables to be used later in the creating of the visualization
+
+world  = ne_countries(scale = "medium", returnclass = "sf") # loading the world map from the sf package
+year_min = min(data$Year, na.rm = TRUE) # setting up the min and max years for the slider feature
+year_max = max(data$Year, na.rm = TRUE)
+
+# building the user interface which is what the user will see when using the shiny app
+
+ui = fluidPage(
+  titlePanel("Click a country on the map and compare it by category over the years"),
+  helpText("Select a country on the map"),
+  helpText("Use the dropdown and slider to explore trends over time"),
+  fluidRow(
+    
+    # this line creates the spot for the map output which will be the world map
+    
+    column(6, leafletOutput("map", height = 550)),
+    
+    # this line makes the dropdown, so the user can change the features that are being compared over time
+    
+    column(6, selectInput(
+        "metric", "Metric:",
+        choices = c(
+          "Forest Area (kilometers squared)" = "Forest_Area_km2",
+          "Forest Cover Percentage" = "Forest_Cover_Pct",
+          "Annual Deforestation Rate" = "Annual_Deforestation_Rate",
+          "Annual Afforestation Rate" = "Annual_Afforestation_Rate",
+          "Total Carbon Stock (tonnes)" = "Total_Carbon_Stock_Tonnes"
+        ), selected = "Forest_Area_km2"),
+        
+    # this line is for the year slider time range which will allow the user to change the duration that they are looking at
+     
+     sliderInput("years", "Year range:",
+        min = year_min, max = year_max,
+        value = c(year_min, year_max), step = 1, sep = ""),
+      h4(textOutput("selected")),
+      plotOutput("timeline", height = 520))))
+```
+
+```{r, echo = FALSE}
+# doing the backend work of what will be doing the computations that appear 
+
+server = function(input, output, session) {
+  
+  latest_year = max(data$Year, na.rm = TRUE)
+  
+  # making the table of the map information to include on the globe
+  
+  map_data = data %>%
+    filter(Year == latest_year) %>%
+    group_by(iso3) %>% # grouping by the country codes to make sure they map correctly on the map
+    summarise(value = mean(Forest_Area_km2, na.rm = TRUE), .groups = "drop")
+  
+  world_map = world %>%
+    left_join(map_data, by = c("iso_a3" = "iso3")) # this part lines up the map table with the world map to make sure all the information lines up with one another
+    # this is what gives the shapes on the map meaning essentially
+  
+  pal_colors = colorNumeric(palette = "YlGn",domain = world_map$value,na.color = "grey") # palette colors for the map with grey being the countries on the map with no value
+  
+  # is this what makes the map and makes sure it only loads once but still allows for new queries
+  
+  output$map = renderLeaflet({
+    leaflet(world_map) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      addPolygons(
+        layerId = ~iso_a3,
+        fillColor = ~pal_colors(value),
+        fillOpacity = 0.8,
+        color = "grey",
+        weight = 0.5,
+        label = ~paste0(
+          name, "<br>",
+          "Forest Area (", latest_year, "): ",
+          ifelse(is.na(value), "NA", round(value, 0)))) %>%
+      addLegend(
+        pal = pal_colors,
+        values = ~value,
+        title = paste0("Forest Area (", latest_year, ")"),
+        position = "bottomright")})
+
+  # this click part stores which country is clicked on the map
+  
+  clicked_iso3 = reactiveVal(NULL)
+  
+  selected_country_name = reactive({
+    req(clicked_iso3())
+    world %>%
+      filter(iso_a3 == clicked_iso3()) %>%
+      pull(name)
+  })
+  
+  # this is the click event and runs this code when a country is clicked
+  
+  observeEvent(input$map_shape_click, {
+    clicked_iso3(input$map_shape_click$id)})
+  
+  # text that shows what has been selected whether something has been clicked or not
+  
+  output$selected = renderText({
+    if (is.null(clicked_iso3())) {
+      "No country selected"
+    } else {paste("Selected Country:", selected_country_name())}})
+
+  # this is what runs once the click has occurred and varies depending on what is clicked and the timeline that is selected
+  
+  selected_data = reactive({
+    req(clicked_iso3())
+    data %>%
+      filter(
+        iso3 == clicked_iso3(),
+        Year >= input$years[1],
+        Year <= input$years[2]
+      ) %>%
+      arrange(Year)})
+  
+  # computes and displays the global averages in comparison to the country that was selected
+  
+  avg_all_countries = reactive({
+    data %>% filter(
+        Year >= input$years[1],
+        Year <= input$years[2]) %>%
+      group_by(Year) %>%
+      summarise(avg_value = mean(.data[[input$metric]], na.rm = TRUE), .groups = "drop") %>%
+      arrange(Year)})
+
+  # this is what creates the timeline plot
+  
+  output$timeline = renderPlot({
+    df = selected_data()
+    req(nrow(df) > 0) # requires that each plot has a minimum of 1 row
+    
+    avg_df = avg_all_countries() # pulls the global average
+    req(nrow(avg_df) > 0)
+    
+    ggplot() + geom_line(data = df, aes(
+          x = Year,
+          y = .data[[input$metric]],
+          color = "Selected country",
+          linetype = "Selected country" ),linewidth = 1) +
+      geom_point(data = df, aes(
+          x = Year,
+          y = .data[[input$metric]],
+          color = "Selected country"), size = 1.8) +
+      geom_line(data = avg_df, aes(
+          x = Year,
+          y = avg_value,
+          color = "Global average",
+          linetype = "Global average"),linewidth = 1.1) +
+      scale_color_manual(name = "",values = c(
+          "Selected country" = "blue",
+          "Global average" = "red")) +
+      scale_linetype_manual(name = "", values = c(
+          "Selected country" = "solid",
+          "Global average" = "dashed")) +
+      theme_minimal() + labs(
+        title = paste("Selected Country vs Global Average (", selected_country_name(), ")", sep = ""),
+        x = "Year",
+        y = NULL) + theme(
+        legend.position = "top",
+        legend.text = element_text(size = 11))})}
+
+# launches the shiny app
+
+shinyApp(ui, server)
+```
+
+***Interesting facts:***
+
+Some notable patterns come to light given the visualization:
+
+- Carbon levels appear to fall in line with the squared kilometers of forest areas, hinting at a tied relationship between them. 
+- Many countries saw spikes or drops given certain years for deforestation and afforestation, these spikes could be occurring in response to one another.
+- Larger countries did not see much variations in the forest cover percentage, which could be tied to the physical terrain and what is livable. 
+- It was surprising to see countries that fall along the equator typically saw higher than global average deforestation rates. 
+- Regions that were below the average global forest area, tended to struggle with higher rates of deforestation, this could tie to the area not having many trees, which makes afforestation even more crucial.
+
+These observations suggest things might be occurring more regionally rather than being universal across the entire globe and are being influenced by geography and regional economies.
+
+
+***Shiny app R script: https://github.com/alexishunting/global_deforestation_2000-2025.git***
+***Image Link: https://www.rainforest-alliance.org/wp-content/uploads/2020/11/peruvian-amazon-rainforest-canopy.jpg.optimal.jpg***
